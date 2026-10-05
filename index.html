@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Geoapify 旅行地圖測試</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    :root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color:#18202a; background:#f6f7f9; }
+    * { box-sizing:border-box; }
+    body { margin:0; }
+    .wrap { max-width:900px; margin:0 auto; padding:16px; }
+    h1 { font-size:22px; margin:4px 0 8px; }
+    p { line-height:1.5; color:#56606b; }
+    .panel { background:white; border:1px solid #dde2e7; border-radius:16px; padding:14px; margin-bottom:12px; }
+    label { display:block; font-weight:700; margin-bottom:6px; }
+    input, button { font:inherit; min-height:46px; border-radius:12px; }
+    input { width:100%; border:1px solid #cfd6dd; padding:0 12px; font-size:16px; }
+    button { border:0; padding:0 16px; font-weight:700; cursor:pointer; }
+    .primary { background:#18202a; color:white; }
+    .secondary { background:#eef1f4; color:#18202a; }
+    .row { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+    .row > * { flex:1 1 150px; }
+    #map { height:520px; width:100%; border-radius:16px; overflow:hidden; background:#e8ecef; }
+    .status { padding:10px 12px; border-radius:12px; background:#f1f4f6; margin-top:10px; font-size:14px; }
+    .small { font-size:13px; color:#6b747e; }
+    .day-marker { width:38px; height:38px; border-radius:50%; background:white; color:#111; border:3px solid #111; display:grid; place-items:center; font-weight:800; box-shadow:0 2px 8px rgba(0,0,0,.2); }
+    @media (max-width:600px) { .wrap{padding:10px;} #map{height:500px;} }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Geoapify 旅行地圖測試</h1>
+  <p>測試「搜尋地點 → 放 D1/D2 → 自動沿道路連線」。API key 只存在這個頁面的記憶體，不會儲存。</p>
+
+  <div class="panel">
+    <label for="apiKey">1. 貼上你的 Geoapify API key</label>
+    <input id="apiKey" type="password" autocomplete="off" placeholder="貼上 API key">
+    <div class="row"><button id="startBtn" class="primary">啟動地圖</button></div>
+    <div class="small">不要把 API key 放在公開截圖裡。</div>
+  </div>
+
+  <div class="panel">
+    <label for="searchBox">2. 搜尋地點</label>
+    <input id="searchBox" type="search" placeholder="例如 Auckland, New Zealand" disabled>
+    <div class="row">
+      <button id="searchBtn" class="primary" disabled>搜尋</button>
+      <button id="clearBtn" class="secondary" disabled>清除 D1 / D2</button>
+    </div>
+    <div id="status" class="status">先貼上 API key，再按「啟動地圖」。</div>
+  </div>
+
+  <div id="map" aria-label="旅行地圖"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+let map, tileLayer, routeLayer = null;
+let apiKey = "";
+let points = [];
+
+const apiKeyInput = document.getElementById("apiKey");
+const startBtn = document.getElementById("startBtn");
+const searchBox = document.getElementById("searchBox");
+const searchBtn = document.getElementById("searchBtn");
+const clearBtn = document.getElementById("clearBtn");
+const statusEl = document.getElementById("status");
+
+function setStatus(t){ statusEl.textContent = t; }
+
+function makeDayIcon(day){
+  return L.divIcon({
+    className:"",
+    html:'<div class="day-marker">D'+day+'</div>',
+    iconSize:[38,38],
+    iconAnchor:[19,19]
+  });
+}
+
+function initMap(){
+  if (!map) map = L.map("map").setView([-36.8485,174.7633],10);
+  if (tileLayer) map.removeLayer(tileLayer);
+  tileLayer = L.tileLayer(
+    "https://maps.geoapify.com/v1/tile/osm-bright/{z}/{x}/{y}.png?apiKey="+encodeURIComponent(apiKey),
+    { maxZoom:20, attribution:"Powered by Geoapify | © OpenStreetMap contributors" }
+  ).addTo(map);
+
+  searchBox.disabled = false;
+  searchBtn.disabled = false;
+  clearBtn.disabled = false;
+  setStatus("地圖已啟動。先搜尋 D1 地點。");
+  setTimeout(()=>map.invalidateSize(),100);
+}
+
+async function geocode(q){
+  const url = "https://api.geoapify.com/v1/geocode/search?text="+encodeURIComponent(q)+"&limit=1&apiKey="+encodeURIComponent(apiKey);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Geocoding HTTP "+res.status);
+  const data = await res.json();
+  return (data.features && data.features.length) ? data.features[0] : null;
+}
+
+async function drawRoute(){
+  if (points.length < 2) return;
+  if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+
+  setStatus("正在計算 D1 → D2 的道路路線…");
+  const wp = points.map(p => p.lat+","+p.lng).join("|");
+  const url = "https://api.geoapify.com/v1/routing?waypoints="+encodeURIComponent(wp)+"&mode=drive&format=geojson&apiKey="+encodeURIComponent(apiKey);
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Routing HTTP "+res.status);
+  const data = await res.json();
+
+  routeLayer = L.geoJSON(data,{
+    style:{ color:"#ffffff", weight:7, opacity:0.95 }
+  }).addTo(map);
+
+  map.fitBounds(routeLayer.getBounds(),{padding:[35,35]});
+  setStatus("成功：D1 → D2 已沿實際道路產生白色路線。");
+}
+
+function addPoint(latlng,labelText){
+  if (points.length >= 2){
+    setStatus("目前先測試 D1、D2。請先清除後再重試。");
+    return;
+  }
+  const day = points.length + 1;
+  const marker = L.marker(latlng,{ icon:makeDayIcon(day), draggable:true }).addTo(map);
+  marker.bindPopup("<strong>D"+day+"</strong><br>"+(labelText || "手動選點"));
+
+  const item = { lat:latlng.lat, lng:latlng.lng, marker:marker };
+  points.push(item);
+
+  marker.on("dragend", async ()=>{
+    const p = marker.getLatLng();
+    item.lat = p.lat; item.lng = p.lng;
+    if (points.length === 2){
+      try { await drawRoute(); }
+      catch(err){ setStatus("路線更新失敗："+err.message); }
+    }
+  });
+
+  if (points.length === 1) setStatus("D1 已放好。再搜尋第二個地點放 D2。");
+  else drawRoute().catch(err=>setStatus("路線產生失敗："+err.message));
+}
+
+async function doSearch(){
+  const q = searchBox.value.trim();
+  if (!q){ setStatus("請先輸入地名。"); return; }
+
+  try{
+    setStatus("正在搜尋「"+q+"」…");
+    const feature = await geocode(q);
+    if (!feature){ setStatus("找不到這個地點，請換個寫法再試。"); return; }
+
+    const lng = feature.geometry.coordinates[0];
+    const lat = feature.geometry.coordinates[1];
+    const name = feature.properties.formatted || q;
+    map.setView([lat,lng],14);
+
+    const temp = L.circleMarker([lat,lng],{radius:9,weight:3,fillOpacity:.75}).addTo(map);
+    temp.bindPopup('<strong>'+name+'</strong><br><button id="addHereBtn" style="margin-top:8px;padding:8px 12px;">放成 D'+(points.length+1)+'</button>').openPopup();
+
+    temp.on("popupopen",()=>{
+      setTimeout(()=>{
+        const btn = document.getElementById("addHereBtn");
+        if (btn) btn.addEventListener("click",()=>{
+          const loc = temp.getLatLng();
+          map.removeLayer(temp);
+          addPoint(loc,name);
+        },{once:true});
+      },0);
+    });
+
+    setStatus("找到地點。點小圓點後按「放成 D"+(points.length+1)+"」。");
+  }catch(err){
+    setStatus("搜尋失敗："+err.message);
+  }
+}
+
+startBtn.addEventListener("click",()=>{
+  apiKey = apiKeyInput.value.trim();
+  if (!apiKey){ setStatus("請先貼上 API key。"); return; }
+  initMap();
+});
+
+searchBtn.addEventListener("click",doSearch);
+searchBox.addEventListener("keydown",(e)=>{
+  if (e.key === "Enter" && !searchBtn.disabled){ e.preventDefault(); doSearch(); }
+});
+clearBtn.addEventListener("click",()=>{
+  points.forEach(p=>map.removeLayer(p.marker));
+  points = [];
+  if (routeLayer){ map.removeLayer(routeLayer); routeLayer = null; }
+  setStatus("已清除。可以重新放 D1、D2。");
+});
+</script>
+</body>
+</html>
