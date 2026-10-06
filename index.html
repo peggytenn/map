@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Geoapify 旅行地圖測試 v4</title>
+  <title>Geoapify 旅行地圖測試 v5</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <style>
     :root { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:#18202a; background:#f6f7f9; }
@@ -38,8 +38,8 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>Geoapify 旅行地圖測試 v4</h1>
-  <p>搜尋會優先找 D1、D2 附近的同名地點，並顯示多個候選結果，避免跑到其他國家的同名城市。</p>
+  <h1>Geoapify 旅行地圖測試 v5</h1>
+  <p>新增「旅程國家限制」與暖色高對比道路線。搜尋只在這趟旅程的國家內進行。</p>
 
   <div class="panel">
     <label for="apiKey">1. 貼上你的 Geoapify API key</label>
@@ -49,13 +49,22 @@
   </div>
 
   <div class="panel">
-    <label for="modeSelect">2. 搜尋後要做什麼</label>
+    <label for="countrySelect">2. 這趟旅行的國家</label>
+    <select id="countrySelect" disabled>
+      <option value="nz">New Zealand</option>
+      <option value="jp">Japan</option>
+      <option value="us">USA</option>
+      <option value="au">Australia</option>
+      <option value="tw">Taiwan</option>
+    </select>
+
+    <label for="modeSelect" style="margin-top:12px;">3. 搜尋後要做什麼</label>
     <select id="modeSelect" disabled>
       <option value="day">放成 D1 / D2</option>
       <option value="via">加入經過點</option>
     </select>
 
-    <label for="searchBox" style="margin-top:12px;">3. 搜尋地點</label>
+    <label for="searchBox" style="margin-top:12px;">4. 搜尋地點</label>
     <input id="searchBox" type="search" placeholder="例如 Hamilton" disabled>
 
     <div class="row">
@@ -68,7 +77,7 @@
 
   <div class="panel" id="resultPanel" hidden>
     <strong>搜尋結果</strong>
-    <div class="small" style="margin-top:4px;">已依 D1、D2 附近優先排序。請選正確地點。</div>
+    <div class="small" style="margin-top:4px;">只顯示這趟旅行國家內的結果，並優先排列 D1、D2 附近地點。</div>
     <div id="resultList" class="result-list"></div>
   </div>
 
@@ -91,6 +100,7 @@ let searchResultMarkers = [];
 
 const apiKeyInput = document.getElementById("apiKey");
 const startBtn = document.getElementById("startBtn");
+const countrySelect = document.getElementById("countrySelect");
 const modeSelect = document.getElementById("modeSelect");
 const searchBox = document.getElementById("searchBox");
 const searchBtn = document.getElementById("searchBtn");
@@ -130,12 +140,13 @@ function initMap(){
     {maxZoom:20, attribution:"Powered by Geoapify | © OpenStreetMap contributors"}
   ).addTo(map);
 
+  countrySelect.disabled=false;
   modeSelect.disabled=false;
   searchBox.disabled=false;
   searchBtn.disabled=false;
   clearBtn.disabled=false;
   updateModeAvailability();
-  setStatus("地圖已啟動。先放 D1、D2。");
+  setStatus("地圖已啟動。先選這趟旅行國家，再放 D1、D2。");
   setTimeout(()=>map.invalidateSize(),100);
 }
 
@@ -153,6 +164,7 @@ async function geocodeMany(q){
   const params=new URLSearchParams({
     text:q,
     limit:"5",
+    filter:"countrycode:"+countrySelect.value,
     apiKey:apiKey
   });
 
@@ -216,7 +228,7 @@ function addDayPoint(lat,lon,label){
     setStatus("D1 已放好。再搜尋第二個住宿點放 D2。");
   }else{
     modeSelect.value="via";
-    setStatus("D2 已放好。之後的搜尋會優先找 D1、D2 附近的同名地點。");
+    setStatus("D2 已放好。後續搜尋會限制在這趟旅行國家，並優先 D1、D2 附近結果。");
     redrawRouteSafe();
   }
 }
@@ -343,7 +355,11 @@ async function drawRoute(){
   }
 
   routeLayer=L.geoJSON(data,{
-    style:{color:"#ffffff",weight:7,opacity:0.95}
+    style:{
+      color:"#E76F51",
+      weight:7,
+      opacity:0.98
+    }
   }).addTo(map);
 
   const bounds=routeLayer.getBounds();
@@ -393,12 +409,11 @@ function renderSearchResults(features){
   clearSearchResults();
 
   if(!features.length){
-    setStatus("找不到這個地點，請換個寫法再試。");
+    setStatus("在這趟旅行的國家內找不到這個地點，請換個寫法再試。");
     return;
   }
 
   resultPanel.hidden=false;
-
   const latlngs=[];
 
   features.forEach((feature,i)=>{
@@ -445,7 +460,7 @@ function renderSearchResults(features){
     map.fitBounds(L.latLngBounds(latlngs),{padding:[30,30],maxZoom:11});
   }
 
-  setStatus("找到 "+features.length+" 個候選地點，已優先排列 D1、D2 附近結果。請選正確地點。");
+  setStatus("找到 "+features.length+" 個候選地點；已限制在這趟旅行國家內。");
 }
 
 async function doSearch(){
