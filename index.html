@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Geoapify 旅行地圖測試 v3</title>
+  <title>Geoapify 旅行地圖測試 v4</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <style>
     :root { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:#18202a; background:#f6f7f9; }
@@ -27,18 +27,19 @@
     .small { font-size:13px; color:#6b747e; }
     .day-marker { width:38px; height:38px; border-radius:50%; background:#fff; color:#111; border:3px solid #111; display:grid; place-items:center; font-weight:800; box-shadow:0 2px 8px rgba(0,0,0,.2); }
     .via-marker { width:24px; height:24px; border-radius:50%; background:#fff; color:#111; border:2px solid #666; display:grid; place-items:center; font-size:11px; font-weight:800; box-shadow:0 2px 6px rgba(0,0,0,.18); }
-    .via-list { display:grid; gap:8px; margin-top:10px; }
-    .via-item { display:grid; grid-template-columns:1fr auto; gap:8px; align-items:center; padding:10px 12px; border:1px solid #dde2e7; border-radius:12px; background:#fafbfc; }
-    .via-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; }
+    .via-list, .result-list { display:grid; gap:8px; margin-top:10px; }
+    .via-item, .result-item { display:grid; grid-template-columns:1fr auto; gap:8px; align-items:center; padding:10px 12px; border:1px solid #dde2e7; border-radius:12px; background:#fafbfc; }
+    .via-name, .result-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; }
+    .result-meta { font-size:12px; color:#6b747e; margin-top:2px; white-space:normal; }
     .via-actions { display:flex; gap:6px; }
-    .via-actions button { min-width:42px; min-height:38px; padding:0 10px; border-radius:10px; background:#eef1f4; color:#18202a; }
+    .via-actions button, .result-item button { min-width:42px; min-height:38px; padding:0 10px; border-radius:10px; background:#eef1f4; color:#18202a; }
     @media(max-width:600px){ .wrap{padding:10px;} #map{height:500px;} }
   </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>Geoapify 旅行地圖測試 v3</h1>
-  <p>新增「中途經過點」：D1、D2 放好後，可加入最多 3 個經過點，並刪除或調整順序。</p>
+  <h1>Geoapify 旅行地圖測試 v4</h1>
+  <p>搜尋會優先找 D1、D2 附近的同名地點，並顯示多個候選結果，避免跑到其他國家的同名城市。</p>
 
   <div class="panel">
     <label for="apiKey">1. 貼上你的 Geoapify API key</label>
@@ -55,7 +56,7 @@
     </select>
 
     <label for="searchBox" style="margin-top:12px;">3. 搜尋地點</label>
-    <input id="searchBox" type="search" placeholder="例如 Hamilton, New Zealand" disabled>
+    <input id="searchBox" type="search" placeholder="例如 Hamilton" disabled>
 
     <div class="row">
       <button id="searchBtn" class="primary" disabled>搜尋</button>
@@ -63,6 +64,12 @@
     </div>
 
     <div id="status" class="status">先貼上 API key，再按「啟動地圖」。</div>
+  </div>
+
+  <div class="panel" id="resultPanel" hidden>
+    <strong>搜尋結果</strong>
+    <div class="small" style="margin-top:4px;">已依 D1、D2 附近優先排序。請選正確地點。</div>
+    <div id="resultList" class="result-list"></div>
   </div>
 
   <div class="panel" id="viaPanel" hidden>
@@ -76,10 +83,11 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-let map, tileLayer, routeLayer = null, searchMarker = null;
+let map, tileLayer, routeLayer = null;
 let apiKey = "";
 let dayPoints = [];
 let viaPoints = [];
+let searchResultMarkers = [];
 
 const apiKeyInput = document.getElementById("apiKey");
 const startBtn = document.getElementById("startBtn");
@@ -90,6 +98,8 @@ const clearBtn = document.getElementById("clearBtn");
 const statusEl = document.getElementById("status");
 const viaPanel = document.getElementById("viaPanel");
 const viaList = document.getElementById("viaList");
+const resultPanel = document.getElementById("resultPanel");
+const resultList = document.getElementById("resultList");
 
 function setStatus(t){ statusEl.textContent=t; }
 
@@ -129,12 +139,33 @@ function initMap(){
   setTimeout(()=>map.invalidateSize(),100);
 }
 
-async function geocode(q){
-  const params=new URLSearchParams({text:q,limit:"1",apiKey:apiKey});
+function routeCenter(){
+  if(dayPoints.length===0) return null;
+  if(dayPoints.length===1) return {lat:dayPoints[0].lat, lon:dayPoints[0].lon};
+
+  return {
+    lat:(dayPoints[0].lat+dayPoints[1].lat)/2,
+    lon:(dayPoints[0].lon+dayPoints[1].lon)/2
+  };
+}
+
+async function geocodeMany(q){
+  const params=new URLSearchParams({
+    text:q,
+    limit:"5",
+    apiKey:apiKey
+  });
+
+  const center=routeCenter();
+  if(center){
+    params.set("bias","proximity:"+center.lon+","+center.lat);
+  }
+
   const res=await fetch("https://api.geoapify.com/v1/geocode/search?"+params.toString());
   if(!res.ok) throw new Error("Geocoding HTTP "+res.status);
+
   const data=await res.json();
-  return data.features && data.features.length ? data.features[0] : null;
+  return data.features || [];
 }
 
 function visiblePosition(lat,lon,day){
@@ -185,7 +216,7 @@ function addDayPoint(lat,lon,label){
     setStatus("D1 已放好。再搜尋第二個住宿點放 D2。");
   }else{
     modeSelect.value="via";
-    setStatus("D2 已放好。現在可搜尋城鎮或景點，加入中途經過點。");
+    setStatus("D2 已放好。之後的搜尋會優先找 D1、D2 附近的同名地點。");
     redrawRouteSafe();
   }
 }
@@ -212,9 +243,7 @@ function renderViaList(){
     up.textContent="↑";
     up.disabled=i===0;
     up.addEventListener("click",async()=>{
-      const tmp=viaPoints[i-1];
-      viaPoints[i-1]=viaPoints[i];
-      viaPoints[i]=tmp;
+      [viaPoints[i-1],viaPoints[i]]=[viaPoints[i],viaPoints[i-1]];
       renderViaList();
       await redrawRouteSafe();
     });
@@ -224,9 +253,7 @@ function renderViaList(){
     down.textContent="↓";
     down.disabled=i===viaPoints.length-1;
     down.addEventListener("click",async()=>{
-      const tmp=viaPoints[i+1];
-      viaPoints[i+1]=viaPoints[i];
-      viaPoints[i]=tmp;
+      [viaPoints[i+1],viaPoints[i]]=[viaPoints[i],viaPoints[i+1]];
       renderViaList();
       await redrawRouteSafe();
     });
@@ -290,7 +317,6 @@ async function drawRoute(){
   }
 
   const first=routePoints[0];
-  const last=routePoints[routePoints.length-1];
   const allSame=routePoints.every(p=>map.distance([first.lat,first.lon],[p.lat,p.lon])<30);
 
   if(allSame){
@@ -308,14 +334,7 @@ async function drawRoute(){
   setStatus("正在依照 D1 → 經過點 → D2 重新計算道路路線…");
 
   const res=await fetch("https://api.geoapify.com/v1/routing?"+params.toString());
-  if(!res.ok){
-    let detail="";
-    try{
-      const body=await res.text();
-      detail=body ? "："+body.slice(0,140) : "";
-    }catch(e){}
-    throw new Error("Routing HTTP "+res.status+detail);
-  }
+  if(!res.ok) throw new Error("Routing HTTP "+res.status);
 
   const data=await res.json();
   if(!data.features || !data.features.length){
@@ -339,6 +358,96 @@ async function redrawRouteSafe(){
   catch(err){ setStatus("路線產生失敗："+err.message); }
 }
 
+function clearSearchResults(){
+  searchResultMarkers.forEach(m=>map.removeLayer(m));
+  searchResultMarkers=[];
+  resultList.innerHTML="";
+  resultPanel.hidden=true;
+}
+
+function resultLabel(feature){
+  const p=feature.properties || {};
+  return p.formatted || [p.name,p.city,p.state,p.country].filter(Boolean).join(", ");
+}
+
+function resultMeta(feature){
+  const p=feature.properties || {};
+  return [p.city,p.county,p.state,p.country].filter(Boolean).join(" · ");
+}
+
+function chooseResult(feature){
+  const lon=feature.geometry.coordinates[0];
+  const lat=feature.geometry.coordinates[1];
+  const label=resultLabel(feature);
+
+  clearSearchResults();
+
+  if(modeSelect.value==="day"){
+    addDayPoint(lat,lon,label);
+  }else{
+    addViaPoint(lat,lon,label);
+  }
+}
+
+function renderSearchResults(features){
+  clearSearchResults();
+
+  if(!features.length){
+    setStatus("找不到這個地點，請換個寫法再試。");
+    return;
+  }
+
+  resultPanel.hidden=false;
+
+  const latlngs=[];
+
+  features.forEach((feature,i)=>{
+    const lon=feature.geometry.coordinates[0];
+    const lat=feature.geometry.coordinates[1];
+    latlngs.push([lat,lon]);
+
+    const marker=L.circleMarker([lat,lon],{
+      radius:i===0 ? 9 : 7,
+      weight:2,
+      fillOpacity:.65
+    }).addTo(map);
+
+    marker.bindPopup("<strong>"+resultLabel(feature)+"</strong>");
+    marker.on("click",()=>chooseResult(feature));
+    searchResultMarkers.push(marker);
+
+    const row=document.createElement("div");
+    row.className="result-item";
+
+    const info=document.createElement("div");
+    const name=document.createElement("div");
+    name.className="result-name";
+    name.textContent=(i===0 ? "優先： " : "")+resultLabel(feature);
+
+    const meta=document.createElement("div");
+    meta.className="result-meta";
+    meta.textContent=resultMeta(feature);
+
+    info.append(name,meta);
+
+    const pick=document.createElement("button");
+    pick.type="button";
+    pick.textContent="選擇";
+    pick.addEventListener("click",()=>chooseResult(feature));
+
+    row.append(info,pick);
+    resultList.append(row);
+  });
+
+  if(latlngs.length===1){
+    map.setView(latlngs[0],14);
+  }else{
+    map.fitBounds(L.latLngBounds(latlngs),{padding:[30,30],maxZoom:11});
+  }
+
+  setStatus("找到 "+features.length+" 個候選地點，已優先排列 D1、D2 附近結果。請選正確地點。");
+}
+
 async function doSearch(){
   const q=searchBox.value.trim();
   if(!q){
@@ -348,64 +457,8 @@ async function doSearch(){
 
   try{
     setStatus("正在搜尋「"+q+"」…");
-    const feature=await geocode(q);
-
-    if(!feature){
-      setStatus("找不到這個地點，請換個寫法再試。");
-      return;
-    }
-
-    const lon=feature.geometry.coordinates[0];
-    const lat=feature.geometry.coordinates[1];
-    const name=feature.properties.formatted || q;
-
-    map.setView([lat,lon],14);
-
-    if(searchMarker){
-      map.removeLayer(searchMarker);
-      searchMarker=null;
-    }
-
-    searchMarker=L.circleMarker([lat,lon],{
-      radius:9,
-      weight:3,
-      fillOpacity:.75
-    }).addTo(map);
-
-    const mode=modeSelect.value;
-    let actionText="";
-
-    if(mode==="day"){
-      actionText="放成 D"+(dayPoints.length+1);
-    }else{
-      actionText="加入經過點";
-    }
-
-    searchMarker.bindPopup(
-      '<strong>'+name+'</strong><br>'+
-      '<button id="addHereBtn" style="margin-top:8px;padding:8px 12px;">'+actionText+'</button>'
-    ).openPopup();
-
-    setTimeout(()=>{
-      const btn=document.getElementById("addHereBtn");
-      if(btn){
-        btn.addEventListener("click",()=>{
-          if(searchMarker){
-            map.removeLayer(searchMarker);
-            searchMarker=null;
-          }
-
-          if(mode==="day"){
-            addDayPoint(lat,lon,name);
-          }else{
-            addViaPoint(lat,lon,name);
-          }
-        },{once:true});
-      }
-    },0);
-
-    setStatus("找到地點。按地圖卡片裡的「"+actionText+"」。");
-
+    const features=await geocodeMany(q);
+    renderSearchResults(features);
   }catch(err){
     setStatus("搜尋失敗："+err.message);
   }
@@ -440,10 +493,7 @@ clearBtn.addEventListener("click",()=>{
     routeLayer=null;
   }
 
-  if(searchMarker){
-    map.removeLayer(searchMarker);
-    searchMarker=null;
-  }
+  clearSearchResults();
 
   viaPanel.hidden=true;
   viaList.innerHTML="";
